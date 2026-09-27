@@ -3,6 +3,7 @@ praw
 python-dotenv
 ollama
 pandas
+litellm
 streamlit
 
 # Force specific versions
