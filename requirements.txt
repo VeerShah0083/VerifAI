@@ -5,6 +5,7 @@ ollama
 pandas
 litellm
 streamlit
+langchain-google-genai
 
 # Force specific versions
 pydantic>=2.5.0
