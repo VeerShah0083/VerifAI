@@ -4,8 +4,10 @@ VerifAI is an AI-powered platform that analyzes news, social media, and online c
 
 ## Features
 
-- **Reddit News Analysis**: Analyze Reddit posts and extract news-related insights, keywords, and trends.
+- **Multimodal News Fact-Checking**: Verify news claims from screenshots, viral social graphics, rumors you've heard, and reference news links.
+- **Visual & OCR Intelligence**: Extract verbatim text, headlines, platforms (X/Twitter, WhatsApp, etc.), and visual authenticity markers from images.
 - **Misinformation & Propaganda Detection**: Identify propaganda techniques, misinformation indicators, and fake news sites.
+- **Cross-Source Verification**: Scrape and cross-verify optional news article URLs with multi-agent web investigation.
 - **Social Media Tracking**: Track news spread, top hashtags, engagement, and sentiment across social platforms.
 - **Data Visualization**: Visualize topic clusters, word clouds, time series, and reliability metrics.
 - **Comprehensive Reporting**: Generate detailed, structured reports in Markdown or view interactively via Streamlit.
@@ -13,8 +15,9 @@ VerifAI is an AI-powered platform that analyzes news, social media, and online c
 ## Project Structure
 
 - `app.py` — Core logic for news analysis, agent/task orchestration, and report generation.
-- `streamlit.py` — Streamlit web interface for interactive analysis and visualization.
-- `reddit.py` — Reddit scraping, keyword extraction, and Reddit-specific utilities.
+- `streamlit.py` — Streamlit web interface for interactive multimodal fact-checking and visualization.
+- `content_extractor.py` — Gemini Vision multimodal extraction, URL preview fetching, keyword extraction, and input synthesis.
+- `reddit.py` — Legacy Reddit scraping utilities.
 - `requirements.txt` — Python dependencies.
 - `db/` — Local database and cache files (auto-generated).
 
@@ -39,21 +42,18 @@ pip install -r requirements.txt
 
 You will need:
 
-- **Google Gemini** API key (for LLM — supports Gemini 2.5 Flash and Gemini 3 Flash)
-- **Serper** API key (for web search)
-- **Reddit** API credentials (client_id, client_secret, user_agent, redirect_uri)
+- **Google Gemini** API key (for LLM and multimodal image inspection — supports Gemini 2.5 Flash and Gemini 3 Flash)
+- **Serper** API key (for real-time web search and fact verification)
+- **SerpAPI** key (optional, for Google Trends data)
 
-You can set these as environment variables or enter them at runtime when prompted.
+You can set these as environment variables or enter them directly via the Streamlit sidebar.
 
 #### Example `.env` file:
 
 ```
 GEMINI_API_KEY=your_gemini_key
 SERPER_API_KEY=your_serper_key
-REDDIT_CLIENT_ID=your_reddit_client_id
-REDDIT_CLIENT_SECRET=your_reddit_client_secret
-REDDIT_USER_AGENT=your_user_agent
-REDDIT_REDIRECT_URI=your_redirect_uri
+SERPAPI_API_KEY=your_serpapi_key
 ```
 
 ## Usage
@@ -82,8 +82,10 @@ Launch the interactive web interface:
 streamlit run streamlit.py
 ```
 
-- Enter a Reddit post URL to analyze news-related content.
-- View results, download reports, and explore visualizations.
+- Upload a screenshot or image (PNG, JPG, WEBP).
+- Type or paste news text / rumors you've heard.
+- (Optional) Paste news article links to cross-verify.
+- View real-time visual analysis, keyword extraction, and comprehensive fact-check reports.
 - Configure API keys in the sidebar.
 
 ## Output

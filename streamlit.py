@@ -7,9 +7,19 @@ import matplotlib.patches as mpatches
 import seaborn as sns
 from datetime import datetime
 from logger_config import setup_logging, get_logger
-from setup import setup_crewai_config, setup_api_keys, check_llm_status
 from app import run_news_analysis, get_report_as_markdown
-from reddit import scrape_reddit_data, extract_keywords, is_reddit_url, compute_reddit_engagement
+from setup import setup_crewai_config, setup_api_keys, check_llm_status
+from content_extractor import (
+    extract_content_from_image,
+    fetch_url_preview,
+    extract_keywords_from_text,
+    compute_engagement_metrics,
+    synthesize_claim,
+)
+try:
+    from reddit import scrape_reddit_data, extract_keywords, is_reddit_url, compute_reddit_engagement
+except ImportError:
+    pass
 from trends_service import get_trends_metrics
 import traceback
 
@@ -569,70 +579,135 @@ def _display_structured_report(report):
         st.info(f"📝 **Note:** {analysis_note}")
 
 
-# ─── Reddit + Manual Analysis ───
+# ─── Multimodal News Analysis Pipeline ───
 
-def analyze_reddit_post(url, llm_provider="gemini", model_name=None):
-    """Analyze a Reddit post and return the news analysis report"""
-    with st.spinner("Scraping Reddit post..."):
-        reddit_data = scrape_reddit_data(url)
+def analyze_multimodal_news(uploaded_image=None, heard_text="", article_urls="",
+                            custom_keywords="", llm_provider="gemini", model_name=None):
+    """Analyze news content from screenshots/images, heard text, and optional article links."""
+    image_data = {}
+    url_previews = []
 
-    if "error" in reddit_data:
-        st.error(f"Error: {reddit_data['error']}")
-        return None
+    # 1. Process uploaded screenshot / image
+    if uploaded_image is not None:
+        with st.spinner("🔍 Inspecting image with Gemini Vision (OCR & OSINT analysis)..."):
+            image_bytes = uploaded_image.getvalue()
+            mime_type = uploaded_image.type or "image/jpeg"
+            gemini_key = os.environ.get("GEMINI_API_KEY", "")
+            image_data = extract_content_from_image(
+                image_input=image_bytes,
+                mime_type=mime_type,
+                gemini_api_key=gemini_key,
+                model_name=model_name
+            )
 
-    with st.spinner("Extracting keywords..."):
-        keywords = extract_keywords(reddit_data)
+        if image_data.get("error") and not image_data.get("transcribed_text"):
+            st.warning(f"⚠️ Image processing note: {image_data['error']}")
+        else:
+            st.subheader("📸 Screenshot / Image Intelligence")
+            col_img1, col_img2 = st.columns([1, 2])
+            with col_img1:
+                st.image(uploaded_image, caption="Uploaded Evidence", use_container_width=True)
 
-    if not keywords:
-        st.error("No keywords extracted from the post.")
-        return None
+            with col_img2:
+                platform = image_data.get("detected_platform", "Unknown")
+                attribution = image_data.get("source_attribution", "Unknown")
+                core_claim = image_data.get("core_claim", "")
+                headline = image_data.get("headline", "")
 
-    keyword_list = [kw['text'] for kw in keywords]
+                st.markdown(f"**Detected Platform:** `{platform}`")
+                if attribution and attribution != "Unknown":
+                    st.markdown(f"**Source Attribution:** `{attribution}`")
+                if headline:
+                    st.markdown(f"**Visible Headline:** {headline}")
+                if core_claim:
+                    st.markdown(f"**Extracted Core Claim:** {core_claim}")
 
-    st.subheader("Reddit Post Information")
-    st.write(f"**Title:** {reddit_data['title']}")
-    st.write(f"**Subreddit:** r/{reddit_data['subreddit']}")
-    st.write(f"**Author:** u/{reddit_data['author']}")
-    st.write(f"**Score:** {reddit_data['score']} (Upvote ratio: {reddit_data['upvote_ratio']})")
-    st.write(f"**Comments:** {reddit_data['num_comments']}")
+                # Visual authenticity notes
+                auth_notes = image_data.get("visual_authenticity_notes", "")
+                if auth_notes:
+                    st.info(f"🛡️ **Visual Authenticity Cues:** {auth_notes}")
 
-    if reddit_data['selftext']:
-        with st.expander("Post Content"):
-            st.write(reddit_data['selftext'])
+                # Metrics if visible
+                det_metrics = image_data.get("detected_metrics", {})
+                active_metrics = {k: v for k, v in det_metrics.items() if v is not None}
+                if active_metrics:
+                    metric_cols = st.columns(len(active_metrics))
+                    for idx, (m_key, m_val) in enumerate(active_metrics.items()):
+                        with metric_cols[idx]:
+                            st.metric(m_key.replace("_", " ").title(), str(m_val))
 
-    st.subheader("Top Keywords")
-    keywords_data = []
-    for kw in keywords[:20]:
-        keywords_data.append({"Keyword": kw['text'], "Frequency": kw['frequency']})
-    st.dataframe(pd.DataFrame(keywords_data), hide_index=True)
+            if image_data.get("transcribed_text"):
+                with st.expander("📄 Verbatim Transcribed Text from Image"):
+                    st.text(image_data["transcribed_text"])
 
-    # Compute real engagement metrics from Reddit data (Tier 1)
-    with st.spinner("Computing engagement metrics..."):
-        platform_metrics = compute_reddit_engagement(reddit_data)
-        st.caption(f"📊 Reddit engagement: {platform_metrics['engagement_rate']:.1f}% rate, "
-                   f"{platform_metrics['reach']:,} estimated reach, "
-                   f"sentiment: {platform_metrics['sentiment_from_ratio']}")
+    # 2. Process news article links (optional)
+    raw_urls = [u.strip() for u in article_urls.split("\n") if u.strip()] if article_urls else []
+    if raw_urls:
+        with st.spinner("🌐 Fetching previews for referenced news articles..."):
+            for url in raw_urls:
+                prev = fetch_url_preview(url)
+                url_previews.append(prev)
 
-    # Fetch Google Trends data (Tier 2)
-    user_query = f"News analysis for: {reddit_data['title']}"
+        st.subheader("📰 Referenced News Articles")
+        for prev in url_previews:
+            with st.container():
+                st.markdown(f"**[{prev['title']}]({prev['url']})** (`{prev['domain']}`)")
+                st.caption(prev["snippet"])
+
+    # 3. Display user-provided heard news text
+    if heard_text.strip():
+        st.subheader("🗣️ Reported News / Rumor Text")
+        st.info(f'"{heard_text.strip()}"')
+
+    # 4. Synthesize claim, keywords, and platform metrics
+    synthesis = synthesize_claim(
+        heard_text=heard_text,
+        image_data=image_data,
+        url_previews=url_previews
+    )
+
+    # Incorporate custom keywords if provided
+    if custom_keywords.strip():
+        user_kw_list = [k.strip() for k in custom_keywords.split(",") if k.strip()]
+        for ukw in user_kw_list:
+            if ukw.lower() not in [k["text"].lower() for k in synthesis["keywords"]]:
+                synthesis["keywords"].insert(0, {"text": ukw, "frequency": 2})
+                synthesis["keyword_list"].insert(0, ukw)
+
+    user_query = synthesis["user_query"]
+    keywords = synthesis["keywords"]
+    platform_metrics = synthesis["platform_metrics"]
+    urls_for_analysis = synthesis["url_list"]
+
+    st.subheader("🎯 Synthesized Verification Target")
+    st.markdown(f"**Investigation Query:** `{user_query}`")
+
+    if keywords:
+        # Keywords are available but not displayed in the UI per user request
+        pass
+
+    # 5. Fetch Google Trends data for the synthesized claim (Tier 2)
     with st.spinner("Fetching Google Trends data..."):
         try:
-            trends_metrics = get_trends_metrics(reddit_data['title'])
+            trends_query = keywords[0]["text"] if keywords else user_query
+            trends_metrics = get_trends_metrics(trends_query)
             if trends_metrics:
                 platform_metrics.update(trends_metrics)
-                ts_count = len(trends_metrics.get('trends_time_series', []))
+                ts_count = len(trends_metrics.get("trends_time_series", []))
                 if ts_count:
-                    st.caption(f"📈 Google Trends: {ts_count} data points retrieved")
+                    st.caption(f"📈 Google Trends: {ts_count} data points retrieved for '{trends_query}'")
         except Exception as e:
             logger.warning("Trends fetch failed: %s", e)
 
-    keywords = keyword_list[:5]
-    st.info(f"Running analysis for: {user_query}")
+    # 6. Run multi-agent news verification
+    st.info(f"🚀 Starting multi-agent investigation for: **{user_query}**")
 
-    with st.spinner("Running news analysis... This may take several minutes."):
+    top_keywords_for_agents = [k["text"] for k in keywords[:5]]
+    with st.spinner("Running in-depth news verification... This may take several minutes."):
         report = run_news_analysis(
             user_query=user_query,
-            keywords=keywords,
+            urls=urls_for_analysis if urls_for_analysis else None,
+            keywords=top_keywords_for_agents if top_keywords_for_agents else None,
             llm_provider=llm_provider,
             model_name=model_name,
             platform_metrics=platform_metrics,
@@ -641,114 +716,90 @@ def analyze_reddit_post(url, llm_provider="gemini", model_name=None):
     return report
 
 
-def manual_analysis(llm_provider="gemini", model_name=None):
-    """Manual news analysis without Reddit integration"""
-    st.subheader("Manual News Analysis")
+def analyze_reddit_post(url, llm_provider="gemini", model_name=None):
+    """Legacy helper: Analyze a Reddit post."""
+    try:
+        from reddit import scrape_reddit_data, extract_keywords, compute_reddit_engagement
+        with st.spinner("Scraping Reddit post..."):
+            reddit_data = scrape_reddit_data(url)
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        user_query = st.text_input(
-            "News Topic to Analyze:",
-            placeholder="Enter the news topic you want to analyze...",
-            key="user_query_1"
-        )
-        keywords_input = st.text_area(
-            "Additional Keywords (one per line):",
-            placeholder="keyword1\nkeyword2\nkeyword3",
-            key="keywords_input_1"
-        )
-
-    with col2:
-        urls_input = st.text_area(
-            "Specific URLs to analyze (one per line):",
-            placeholder="https://example.com/article1\nhttps://example.com/article2",
-            key="urls_input_1"
-        )
-        hashtags_input = st.text_input(
-            "Hashtags to track (comma-separated):",
-            placeholder="#news, #breaking, #analysis",
-            key="hashtags_input_1"
-        )
-
-    if st.button("Run Manual Analysis", type="primary", key="run_manual_analysis_1"):
-        if not user_query.strip():
-            st.error("Please enter a news topic to analyze.")
+        if "error" in reddit_data:
+            st.error(f"Error: {reddit_data['error']}")
             return None
 
-        keywords = [k.strip() for k in keywords_input.split('\n') if k.strip()] if keywords_input.strip() else None
-        urls = [u.strip() for u in urls_input.split('\n') if u.strip()] if urls_input.strip() else None
-        hashtags = [h.strip() for h in hashtags_input.split(',') if h.strip()] if hashtags_input.strip() else None
+        keywords = extract_keywords(reddit_data)
+        keyword_list = [kw['text'] for kw in keywords]
+        platform_metrics = compute_reddit_engagement(reddit_data)
+        user_query = f"News analysis for: {reddit_data['title']}"
 
-        with st.spinner("Running news analysis... This may take several minutes."):
-            report = run_news_analysis(
-                user_query=user_query.strip(),
-                urls=urls,
-                hashtags=hashtags,
-                keywords=keywords,
-                llm_provider=llm_provider,
-                model_name=model_name,
-            )
-
-        return report
-
-    return None
+        return run_news_analysis(
+            user_query=user_query,
+            keywords=keyword_list[:5],
+            llm_provider=llm_provider,
+            model_name=model_name,
+            platform_metrics=platform_metrics,
+        )
+    except Exception as e:
+        st.error(f"Reddit analysis failed: {e}")
+        return None
 
 
 def main():
     try:
-        st.title("VerifAI: News Analysis Tool")
+        st.title("VerifAI: News & Misinformation Verification")
+        st.caption("AI-powered multi-agent fact-checking across screenshots, rumors, and news articles")
 
         # Sidebar
-        st.sidebar.header("About")
+        st.sidebar.header("About VerifAI")
         st.sidebar.markdown(
             """
-            This tool analyzes news content to extract insights, detect propaganda techniques,
-            and identify misinformation patterns. You can analyze Reddit posts to generate
-            comprehensive reports.
+            **VerifAI** is an advanced news credibility and misinformation verification platform.
+            
+            ### 📥 Supported Input Sources:
+            - 📸 **Screenshots & Images**: Tweet screenshots, WhatsApp forwards, headlines, or infographics
+            - 🗣️ **Heard News / Rumors**: Claims or stories you've heard from peers or social channels
+            - 🔗 **Article Links (Optional)**: News URLs to cross-verify against authoritative reporting
+            
+            Multi-agent AI investigates source credibility, propaganda patterns, bot coordinated narratives, and factual veracity.
             """
         )
 
         # API key + model setup in the sidebar
         with st.sidebar.expander("⚙️ Configuration", expanded=True):
-            # Model selector
             from setup import GEMINI_MODELS, DEFAULT_GEMINI_MODEL
             selected_model = st.selectbox(
                 "Gemini Model",
                 options=list(GEMINI_MODELS.keys()),
                 index=list(GEMINI_MODELS.keys()).index(DEFAULT_GEMINI_MODEL),
                 key="gemini_model_selection",
-                help="Choose which Gemini model to use for analysis",
+                help="Choose which Gemini model to use for analysis and vision",
             )
             st.session_state["gemini_model"] = selected_model
 
-            # Gemini API key
             current_gemini_key = os.environ.get("GEMINI_API_KEY", "")
             gemini_api_key = st.text_input(
                 "Gemini API Key",
                 value=current_gemini_key,
                 type="password",
-                help="Get one at https://aistudio.google.com/app/apikey",
+                help="Required for LLM and image inspection. Get one at https://aistudio.google.com/app/apikey",
                 key="gemini_api_key_input",
             )
 
-            # Serper API key
             current_serper_key = os.environ.get("SERPER_API_KEY", "")
             serper_api_key = st.text_input(
                 "Serper API Key",
                 value=current_serper_key if current_serper_key != "dummy-key-for-ollama" else "",
                 type="password",
-                help="Required for web search functionality",
+                help="Required for real-time web search and fact verification",
                 key="serper_api_key_1",
             )
 
-            # SerpAPI key (Google Trends)
             current_serpapi_key = os.environ.get("SERPAPI_API_KEY", "")
             serpapi_api_key = st.text_input(
-                "SerpAPI Key",
+                "SerpAPI Key (Optional)",
                 value=current_serpapi_key,
                 type="password",
-                help="Used for Google Trends data. Get one at https://serpapi.com",
+                help="Used for Google Trends trendlines. Get one at https://serpapi.com",
                 key="serpapi_api_key_input",
             )
 
@@ -771,41 +822,92 @@ def main():
         else:
             st.sidebar.error(f"❌ {llm_msg}")
 
-        # Read the selected model from session state
         gemini_model = st.session_state.get("gemini_model", DEFAULT_GEMINI_MODEL)
         llm_provider = "gemini"
 
-        # Reddit Analysis interface
-        st.header("Reddit Post Analysis")
-        st.markdown("Analyze a Reddit post to understand news patterns and credibility.")
-
-        url = st.text_input(
-            "Enter a Reddit URL:",
-            placeholder="https://www.reddit.com/r/news/comments/...",
-            help="Paste a link to a Reddit post you want to analyze",
-            key="url_1"
+        # ─── New Multimodal Input Dashboard ───
+        st.header("📥 Submit News Content for Fact-Checking")
+        st.markdown(
+            "Provide any combination of inputs below: a screenshot or image, news text you've heard, and optional article links."
         )
 
-        if st.button("Analyze Reddit Post", type="primary", key="analyze_reddit_post_1"):
-            if not url:
-                st.error("Please enter a Reddit URL.")
-            elif not is_reddit_url(url):
-                st.error("Invalid Reddit URL. Please enter a valid Reddit URL.")
+        col_left, col_right = st.columns([1, 1], gap="medium")
+
+        with col_left:
+            st.markdown("#### 📸 1. Screenshot or Image")
+            uploaded_image = st.file_uploader(
+                "Upload a news screenshot, social post, or graphic:",
+                type=["png", "jpg", "jpeg", "webp"],
+                help="Upload a screenshot of a tweet, WhatsApp forward, news headline, or infographic",
+                key="uploaded_image_file"
+            )
+            if uploaded_image:
+                st.image(uploaded_image, caption=f"Selected: {uploaded_image.name}", use_container_width=True)
+
+        with col_right:
+            st.markdown("#### 🗣️ 2. News Text You've Heard")
+            heard_text = st.text_area(
+                "News claim, rumor, or spoken text:",
+                placeholder="e.g. 'I heard that the central bank is recalling all 500 currency notes by next week' or paste viral forwarded text...",
+                height=130,
+                key="heard_text_input",
+                help="Type or paste any rumor, headline, or claim you've heard"
+            )
+
+            st.markdown("#### 🔗 3. News Article Links (Optional)")
+            article_urls_input = st.text_area(
+                "News article links to cross-verify (one per line):",
+                placeholder="https://example.com/article1\nhttps://reuters.com/article2",
+                height=80,
+                key="article_urls_input",
+                help="Optional: Paste news article URLs to cross-verify against"
+            )
+
+            with st.expander("⚙️ Additional Keywords (Optional)"):
+                custom_keywords_input = st.text_input(
+                    "Custom keywords (comma-separated):",
+                    placeholder="e.g. banking, RBI, currency reform",
+                    key="custom_keywords_input"
+                )
+
+        st.markdown("---")
+        verify_clicked = st.button(
+            "🔍 Verify & Analyze News Claim",
+            type="primary",
+            use_container_width=True,
+            key="verify_news_claim_btn"
+        )
+
+        if verify_clicked:
+            # Validate input presence
+            has_image = uploaded_image is not None
+            has_heard = bool(heard_text.strip())
+            has_urls = bool(article_urls_input.strip())
+
+            if not has_image and not has_heard and not has_urls:
+                st.error("⚠️ Please provide at least one input source: an uploaded screenshot/image, news text you've heard, or article links.")
             elif not setup_api_keys():
-                st.error("API keys not set or invalid. Please set valid API keys in the sidebar.")
+                st.error("API keys not configured. Please set valid Gemini and Serper API keys in the sidebar.")
             else:
                 try:
-                    report = analyze_reddit_post(url, llm_provider, model_name=gemini_model)
+                    report = analyze_multimodal_news(
+                        uploaded_image=uploaded_image,
+                        heard_text=heard_text,
+                        article_urls=article_urls_input,
+                        custom_keywords=custom_keywords_input,
+                        llm_provider=llm_provider,
+                        model_name=gemini_model
+                    )
 
                     if report:
                         st.session_state["report"] = report
-                        st.success("Analysis completed!")
+                        st.success("✅ Analysis completed successfully!")
                     else:
                         st.error("Failed to generate report.")
 
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
-                    st.error("If this error persists, check your API keys and Ollama setup.")
+                    st.error("Check your API keys and network connection.")
 
         # Display the report from session state (persists across reruns)
         if st.session_state.get("report"):
@@ -817,7 +919,7 @@ def main():
             st.download_button(
                 label="📥 Download Report as Markdown",
                 data=markdown_report,
-                file_name=f"reddit_news_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                file_name=f"news_verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
                 mime="text/markdown",
                 key="download_report_btn"
             )
@@ -827,5 +929,7 @@ def main():
         st.code(traceback.format_exc())
         st.stop()
 
+
 if __name__ == "__main__":
     main()
+

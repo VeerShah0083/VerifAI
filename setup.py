@@ -74,10 +74,10 @@ check_gemini_status = check_llm_status
 
 # Available Gemini models (display name → LiteLLM model string)
 GEMINI_MODELS = {
-    "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
+    "Gemini 3.8 Flash": "gemini/gemini-3.8-flash",
     "Gemini 3 Flash": "gemini/gemini-3-flash-preview",
 }
-DEFAULT_GEMINI_MODEL = "Gemini 2.5 Flash"
+DEFAULT_GEMINI_MODEL = "Gemini 3.8 Flash"
 
 def get_llm(provider=None, model_name=None) -> BaseChatModel:
     """Initializes and returns a Gemini LLM.

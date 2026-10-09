@@ -1,0 +1,8 @@
+# Environments
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+chroma_cache/
+.crewai/

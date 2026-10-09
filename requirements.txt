@@ -1,4 +1,6 @@
 # Core dependencies
+google-genai
+pillow
 praw
 python-dotenv
 ollama
@@ -25,3 +27,4 @@ plotly
 matplotlib
 seaborn
 wordcloud
+sentence_transformers
