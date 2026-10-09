@@ -17,7 +17,6 @@ VerifAI is an AI-powered platform that analyzes news, social media, and online c
 - `app.py` — Core logic for news analysis, agent/task orchestration, and report generation.
 - `streamlit.py` — Streamlit web interface for interactive multimodal fact-checking and visualization.
 - `content_extractor.py` — Gemini Vision multimodal extraction, URL preview fetching, keyword extraction, and input synthesis.
-- `reddit.py` — Legacy Reddit scraping utilities.
 - `requirements.txt` — Python dependencies.
 - `db/` — Local database and cache files (auto-generated).
 
